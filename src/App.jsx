@@ -109,6 +109,12 @@ export default function App() {
   
             saveDeviceIdToDB(currentDeviceId); 
             setDeviceId(currentDeviceId);
+
+            if (navigator.storage && navigator.storage.persist) {
+                navigator.storage.persist().then((granted) => {
+                    console.log('Persistent storage granted:', granted);
+                });
+            }
   
             // 2. Check existing session
             const session = localStorage.getItem('gasbubar_session');
@@ -147,8 +153,10 @@ export default function App() {
                 
                 localStorage.setItem('gasbubar_session', JSON.stringify({ email: loginEmail }));
                 setAuthEmail(loginEmail);
+                setTimeout(() => {
+                    setIsAuthenticated(true);
+                }, 800);
                 
-                setIsAuthenticated(true);
             } else {
                 setLoginState('failed');
                 if (data.message === "Max Device Terpakai") {
@@ -742,6 +750,13 @@ ATURAN MUTLAK:
     if (!isAuthenticated) {
         return (
             <div className="fixed inset-0 flex items-center justify-center bg-slate-100 overflow-hidden" style={{ backgroundImage: 'linear-gradient(rgba(234, 88, 12, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(234, 88, 12, 0.05) 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
+                <style>{`
+                    /* CSS Animasi Titik Jalan */
+                    .dot-anim::after { content: ''; animation: dots 1.5s steps(4, end) infinite; }
+                    @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } 100% { content: ''; } }
+                `}</style>
+
+                {/* GLOBAL TOAST NOTIFICATION */}
                 <div className={`fixed top-4 right-4 z-[9999] transition-all duration-500 transform ${toast.show ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0'}`}>
                     <div className={`px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 border ${toast.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
                         {toast.type === 'error' ? <AlertTriangleIcon className="w-5 h-5"/> : <CheckCircleIcon className="w-5 h-5"/>}
@@ -750,25 +765,13 @@ ATURAN MUTLAK:
                 </div>
 
                 <div className={`flex flex-col items-center justify-center w-full max-w-sm px-4 z-10 transition-all duration-500 ${loginState === 'success' ? 'opacity-0 scale-110' : 'opacity-100 scale-100'}`}>
-                    <div className="text-[32px] leading-none font-black text-orange-500 tracking-widest flex items-center gap-2 mb-6 drop-shadow-sm">
-                        GAS.BUBAR
-                    </div>
                     <div className="w-full bg-white p-6 rounded-lg border border-orange-200 shadow-md flex flex-col gap-4 relative z-10">
-                        <input 
-                            type="email" 
-                            value={loginEmail} 
-                            onChange={e => setLoginEmail(e.target.value)} 
-                            onKeyDown={e => e.key === 'Enter' && handleLogin()} 
-                            className="w-full p-3 rounded-lg bg-white border border-slate-300 text-slate-800 font-bold text-center outline-none transition-all h-12 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50 disabled:bg-slate-100" 
-                            placeholder="MASUKKAN EMAIL" 
-                            disabled={loginState === 'loading' || loginState === 'success'} 
-                        />
-                        <button 
-                            onClick={handleLogin} 
-                            disabled={loginState === 'loading' || loginState === 'success'} 
-                            className="bg-orange-600 hover:bg-orange-700 text-white p-3 text-base font-bold rounded-lg cursor-pointer shadow-sm transition disabled:opacity-50 flex items-center justify-center gap-2"
-                        >
-                            {loginState === 'loading' ? <><CustomSpinner className="w-5 h-5 text-white" /> MEMPROSES...</> : 'LOGIN'}
+                        <div className="text-center mb-2">
+                            <h1 className="text-2xl font-black text-orange-500 tracking-widest drop-shadow-sm">GAS.BUBAR</h1>
+                        </div>
+                        <input type="email" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()} className="w-full p-3 rounded-lg bg-white border border-slate-300 text-slate-800 font-bold text-center outline-none transition-all h-12 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50 disabled:bg-slate-100" placeholder="MASUKKAN EMAIL" disabled={loginState === 'loading' || loginState === 'success'} />
+                        <button onClick={handleLogin} disabled={loginState === 'loading' || loginState === 'success'} className="bg-orange-600 hover:bg-orange-700 text-white p-3 text-base font-bold rounded-lg cursor-pointer shadow-sm transition disabled:opacity-50 flex items-center justify-center gap-1">
+                            {loginState === 'loading' ? <>MEMPROSES<span className="dot-anim inline-block w-3 text-left"></span></> : 'LOGIN'}
                         </button>
                     </div>
                 </div>
@@ -819,15 +822,6 @@ ATURAN MUTLAK:
                                         <LogOutIcon className="w-4 h-4" />
                                     </button>
                                 </div>
-                            </div>
-
-                            <div className="flex gap-2 w-full">
-                                <button onClick={() => window.open('https://lynk.id/isaproject', '_blank')} className="flex-1 flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 rounded-lg transition shadow-sm text-xs tracking-wide">
-                                    <BriefcaseIcon /> My Project
-                                </button>
-                                <button onClick={() => window.open('https://lynk.id/isaproject/0581ez0729vx', '_blank')} className="flex-1 flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-lg transition shadow-sm text-xs tracking-wide">
-                                    <CoffeeIcon /> Support Project
-                                </button>
                             </div>
 
                             <div className="bg-white p-4 rounded-lg shadow-sm border border-orange-200">
@@ -1041,7 +1035,7 @@ ATURAN MUTLAK:
                             {isGenerating ? (
                                 <div className={`flex-1 border text-xs font-bold rounded-lg flex items-center justify-center gap-2 shadow-sm select-none transition-all ${isPaused ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-orange-50 text-orange-700 border-orange-200'}`}>
                                     <SparklesIcon className={`w-4 h-4 ${isPaused ? '' : 'animate-spin'} ${isPaused ? 'text-amber-600' : 'text-orange-600'}`} />
-                                    <span className="uppercase tracking-wide">{isPaused ? 'Terhenti' : 'Memproses...'}</span>
+                                    <span className="uppercase tracking-wide">{isPaused ? 'Terhenti' : <>MEMPROSES<span className="dot-anim inline-block w-3 text-left"></span></>}</span>
                                 </div>
                             ) : (
                                 <button onClick={() => startGeneration(false)} disabled={!canGenerate} className={`flex-1 text-xs font-bold rounded-lg border shadow transition-colors flex items-center justify-center gap-2 uppercase tracking-wide truncate ${canGenerate ? 'bg-orange-600 hover:bg-orange-700 text-white border-orange-700 hover:-translate-y-0.5' : 'bg-slate-100 border-slate-200 cursor-not-allowed text-slate-400'}`}>
