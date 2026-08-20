@@ -784,6 +784,10 @@ ATURAN MUTLAK:
     // ==========================================
     return (
         <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-slate-100 text-slate-900 flex flex-col">
+            <style>{`
+                .dot-anim::after { content: ''; animation: dots 1.5s steps(4, end) infinite; }
+                @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } 100% { content: ''; } }
+            `}</style>
             <header className="bg-[#0f172a] border-b border-slate-800 sticky top-0 z-30 shadow-md h-14 flex items-center shrink-0">
                 <div className="w-full px-4 sm:px-6 flex justify-between items-center">
                     <div className="text-[28px] leading-none font-bold text-orange-500 tracking-widest flex items-center gap-2">
@@ -1035,7 +1039,7 @@ ATURAN MUTLAK:
                             {isGenerating ? (
                                 <div className={`flex-1 border text-xs font-bold rounded-lg flex items-center justify-center gap-2 shadow-sm select-none transition-all ${isPaused ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-orange-50 text-orange-700 border-orange-200'}`}>
                                     <SparklesIcon className={`w-4 h-4 ${isPaused ? '' : 'animate-spin'} ${isPaused ? 'text-amber-600' : 'text-orange-600'}`} />
-                                    <span className="uppercase tracking-wide">{isPaused ? 'Terhenti' : <>MEMPROSES<span className="dot-anim inline-block w-3 text-left"></span></>}</span>
+                                    <span className="uppercase tracking-wide">{isPaused ? 'Terhenti' : <>MEMPROSES<span className="dot-anim inline-block w-4 text-left"></span></>}</span>
                                 </div>
                             ) : (
                                 <button onClick={() => startGeneration(false)} disabled={!canGenerate} className={`flex-1 text-xs font-bold rounded-lg border shadow transition-colors flex items-center justify-center gap-2 uppercase tracking-wide truncate ${canGenerate ? 'bg-orange-600 hover:bg-orange-700 text-white border-orange-700 hover:-translate-y-0.5' : 'bg-slate-100 border-slate-200 cursor-not-allowed text-slate-400'}`}>
