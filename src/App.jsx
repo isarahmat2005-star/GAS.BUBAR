@@ -903,15 +903,6 @@ ATURAN MUTLAK:
                                 </div>
                             </div>
 
-                            <div className="flex gap-2 w-full">
-                                <button onClick={() => window.open('https://lynk.id/isaproject', '_blank')} className="flex-1 flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 rounded-lg transition shadow-sm text-xs tracking-wide">
-                                    <BriefcaseIcon /> My Project
-                                </button>
-                                <button onClick={() => window.open('https://lynk.id/isaproject/0581ez0729vx', '_blank')} className="flex-1 flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-lg transition shadow-sm text-xs tracking-wide">
-                                    <CoffeeIcon /> Support Project
-                                </button>
-                            </div>
-
                             <div className="bg-white p-4 rounded-lg shadow-sm border border-orange-200">
                                 <div className="grid grid-cols-4 gap-2 mb-3">
                                     <div>
