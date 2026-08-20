@@ -21,11 +21,12 @@ import {
 const GAS_AUTH_URL = "https://script.google.com/macros/s/AKfycbx0tRGGEtOyJumYhvzZcOi9Q68Rb-43DqsfAiWO57T8el8O9vQ0681xhwge71JVGjEugg/exec"; 
 
 // =====================================================================
-// === INDEXED DB HELPER FUNCTIONS (DEVICE ID) ===
+// === INDEXED DB HELPER FUNCTIONS (DEVICE ID & IMAGES) ===
 // =====================================================================
 const DB_NAME = 'GasBubarDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Diubah ke 2 untuk menambahkan tabel penyimpanan gambar
 const META_STORE_NAME = 'meta_store';
+const STORE_IMAGES = 'images_store'; // Tabel baru untuk menyimpan gambar
 
 const initDB = () => {
     return new Promise((resolve, reject) => {
@@ -36,6 +37,9 @@ const initDB = () => {
             const db = event.target.result;
             if (!db.objectStoreNames.contains(META_STORE_NAME)) {
               db.createObjectStore(META_STORE_NAME, { keyPath: 'key' }); 
+            }
+            if (!db.objectStoreNames.contains(STORE_IMAGES)) {
+              db.createObjectStore(STORE_IMAGES, { keyPath: 'id' }); 
             }
         };
     });
@@ -63,6 +67,54 @@ const loadDeviceIdFromDB = () => {
             resolve(null);
         }
     });
+};
+
+// --- FUNGSI BARU UNTUK MENYIMPAN GAMBAR KE INDEXEDDB ---
+const saveImageToDB = async (imgData) => {
+    try {
+        const db = await initDB();
+        const tx = db.transaction(STORE_IMAGES, 'readwrite');
+        const { url, ...storable } = imgData; // Hapus url blob sementara agar tidak error saat disimpan
+        tx.objectStore(STORE_IMAGES).put(storable);
+    } catch (err) {
+        console.error("Gagal menyimpan gambar:", err);
+    }
+};
+
+const loadImagesFromDB = () => {
+    return new Promise(async (resolve) => {
+        try {
+            const db = await initDB();
+            const tx = db.transaction(STORE_IMAGES, 'readonly');
+            const req = tx.objectStore(STORE_IMAGES).getAll();
+            req.onsuccess = () => {
+                const loaded = req.result.map(data => ({
+                    ...data,
+                    url: data.blob ? URL.createObjectURL(data.blob) : null
+                }));
+                resolve(loaded);
+            };
+            req.onerror = () => resolve([]);
+        } catch (err) { 
+            resolve([]); 
+        }
+    });
+};
+
+const deleteImageFromDB = async (id) => {
+    try {
+        const db = await initDB();
+        const tx = db.transaction(STORE_IMAGES, 'readwrite');
+        tx.objectStore(STORE_IMAGES).delete(id);
+    } catch (err) {}
+};
+
+const clearImagesFromDB = async () => {
+    try {
+        const db = await initDB();
+        const tx = db.transaction(STORE_IMAGES, 'readwrite');
+        tx.objectStore(STORE_IMAGES).clear();
+    } catch (err) {}
 };
 
 export default function App() {
@@ -116,12 +168,17 @@ export default function App() {
                 });
             }
   
-            // 2. Check existing session
+            // 2. Check existing session & Load Images
             const session = localStorage.getItem('gasbubar_session');
             if (session) {
                 const parsedSession = JSON.parse(session);
                 setIsAuthenticated(true);
                 setAuthEmail(parsedSession.email);
+                
+                // MENGEMBALIKAN INGATAN GAMBAR DARI LOKAL
+                loadImagesFromDB().then(savedImages => {
+                    if (savedImages.length > 0) setImages(savedImages);
+                });
             }
         };
   
@@ -155,6 +212,11 @@ export default function App() {
                 setAuthEmail(loginEmail);
                 setTimeout(() => {
                     setIsAuthenticated(true);
+                    
+                    // MENGEMBALIKAN INGATAN GAMBAR SETELAH LOGIN
+                    loadImagesFromDB().then(savedImages => {
+                        if (savedImages.length > 0) setImages(savedImages);
+                    });
                 }, 800);
                 
             } else {
@@ -553,7 +615,7 @@ ATURAN MUTLAK:
         const blob = dataUrlToBlob(formattedDataUrl);
         imageUrl = URL.createObjectURL(blob);
         
-        return imageUrl;
+        return { imageUrl, blob }; // Diubah untuk mereturn object
     };
 
     const startGeneration = async (isResume = false) => {
@@ -565,12 +627,14 @@ ATURAN MUTLAK:
                 id: MathRandom().toString(36).substr(2, 9),
                 title: 'Menunggu Antrean...',
                 basePrompt: p,
-                status: 'pending', url: null, error: null,
+                status: 'pending', url: null, blob: null, error: null,
                 format: selectedFormat
             }));
             
             setImages(prev => [...newTasks, ...prev.map(f => f.status === 'failed' ? { ...f, status: 'pending', error: null } : f)]);
             setCurrentPage(1); 
+            // SIMPAN ANTRIAN AWAL KE DB
+            newTasks.forEach(task => saveImageToDB(task));
         }
 
         isGeneratingRef.current = true;
@@ -608,21 +672,29 @@ ATURAN MUTLAK:
                         setImages(prev => prev.map(f => f.id === taskToProcess.id ? { ...f, status: 'processing', title: 'Sedang Memproses...', error: null } : f));
 
                         try {
-                            const [url, generatedTitle] = await Promise.all([
+                            const [result, generatedTitle] = await Promise.all([
                                 callAI(taskToProcess),
                                 generateTitleAI(taskToProcess.basePrompt)
                             ]);
 
                             if (isPausedRef.current) {
-                                setImages(prev => prev.map(f => f.id === taskToProcess.id ? { ...f, status: 'pending', title: 'Menunggu Antrean...' } : f));
+                                const updatedTask = { ...taskToProcess, status: 'pending', title: 'Menunggu Antrean...' };
+                                setImages(prev => prev.map(f => f.id === taskToProcess.id ? updatedTask : f));
+                                saveImageToDB(updatedTask); // SIMPAN KE DB
                             } else {
-                                setImages(prev => prev.map(f => f.id === taskToProcess.id ? { ...f, status: 'done', url, title: generatedTitle } : f));
+                                const updatedTask = { ...taskToProcess, status: 'done', url: result.imageUrl, blob: result.blob, title: generatedTitle };
+                                setImages(prev => prev.map(f => f.id === taskToProcess.id ? updatedTask : f));
+                                saveImageToDB(updatedTask); // SIMPAN KE DB
                             }
                         } catch (error) {
                             if (isPausedRef.current) {
-                                setImages(prev => prev.map(f => f.id === taskToProcess.id ? { ...f, status: 'pending', title: 'Menunggu Antrean...' } : f));
+                                const updatedTask = { ...taskToProcess, status: 'pending', title: 'Menunggu Antrean...' };
+                                setImages(prev => prev.map(f => f.id === taskToProcess.id ? updatedTask : f));
+                                saveImageToDB(updatedTask); // SIMPAN KE DB
                             } else {
-                                setImages(prev => prev.map(f => f.id === taskToProcess.id ? { ...f, status: 'failed', title: 'Gagal Render', error: error.message } : f));
+                                const updatedTask = { ...taskToProcess, status: 'failed', title: 'Gagal Render', error: error.message };
+                                setImages(prev => prev.map(f => f.id === taskToProcess.id ? updatedTask : f));
+                                saveImageToDB(updatedTask); // SIMPAN KE DB
                             }
                         }
 
@@ -677,6 +749,7 @@ ATURAN MUTLAK:
         
         setImages([]);
         setClearAllConfirm(false);
+        clearImagesFromDB(); // MENGHAPUS SEMUA DARI DB
     };
 
     const confirmDeleteFile = () => {
@@ -684,6 +757,7 @@ ATURAN MUTLAK:
         if (fileToDel && fileToDel.url) URL.revokeObjectURL(fileToDel.url);
         
         setImages(prev => prev.filter(f => f.id !== fileToDelete));
+        deleteImageFromDB(fileToDelete); // MENGHAPUS FILE TERTENTU DARI DB
         setFileToDelete(null);
     };
 
@@ -771,7 +845,8 @@ ATURAN MUTLAK:
                         </div>
                         <input type="email" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()} className="w-full p-3 rounded-lg bg-white border border-slate-300 text-slate-800 font-bold text-center outline-none transition-all h-12 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50 disabled:bg-slate-100" placeholder="MASUKKAN EMAIL" disabled={loginState === 'loading' || loginState === 'success'} />
                         <button onClick={handleLogin} disabled={loginState === 'loading' || loginState === 'success'} className="bg-orange-600 hover:bg-orange-700 text-white p-3 text-base font-bold rounded-lg cursor-pointer shadow-sm transition disabled:opacity-50 flex items-center justify-center gap-1">
-                            {loginState === 'loading' ? <>MEMPROSES<span className="dot-anim inline-block w-3 text-left"></span></> : 'LOGIN'}
+                            {/* SPAN WRAPPER UNTUK MENGHILANGKAN GAP PADA TITIK */}
+                            {loginState === 'loading' ? <span>MEMPROSES<span className="dot-anim inline-block w-4 text-left"></span></span> : 'LOGIN'}
                         </button>
                     </div>
                 </div>
@@ -826,6 +901,15 @@ ATURAN MUTLAK:
                                         <LogOutIcon className="w-4 h-4" />
                                     </button>
                                 </div>
+                            </div>
+
+                            <div className="flex gap-2 w-full">
+                                <button onClick={() => window.open('https://lynk.id/isaproject', '_blank')} className="flex-1 flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 rounded-lg transition shadow-sm text-xs tracking-wide">
+                                    <BriefcaseIcon /> My Project
+                                </button>
+                                <button onClick={() => window.open('https://lynk.id/isaproject/0581ez0729vx', '_blank')} className="flex-1 flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-lg transition shadow-sm text-xs tracking-wide">
+                                    <CoffeeIcon /> Support Project
+                                </button>
                             </div>
 
                             <div className="bg-white p-4 rounded-lg shadow-sm border border-orange-200">
@@ -1039,7 +1123,8 @@ ATURAN MUTLAK:
                             {isGenerating ? (
                                 <div className={`flex-1 border text-xs font-bold rounded-lg flex items-center justify-center gap-2 shadow-sm select-none transition-all ${isPaused ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-orange-50 text-orange-700 border-orange-200'}`}>
                                     <SparklesIcon className={`w-4 h-4 ${isPaused ? '' : 'animate-spin'} ${isPaused ? 'text-amber-600' : 'text-orange-600'}`} />
-                                    <span className="uppercase tracking-wide">{isPaused ? 'Terhenti' : <>MEMPROSES<span className="dot-anim inline-block w-4 text-left"></span></>}</span>
+                                    {/* SPAN WRAPPER UNTUK MENGHILANGKAN GAP PADA TITIK */}
+                                    <span className="uppercase tracking-wide">{isPaused ? 'Terhenti' : <span>MEMPROSES<span className="dot-anim inline-block w-4 text-left"></span></span>}</span>
                                 </div>
                             ) : (
                                 <button onClick={() => startGeneration(false)} disabled={!canGenerate} className={`flex-1 text-xs font-bold rounded-lg border shadow transition-colors flex items-center justify-center gap-2 uppercase tracking-wide truncate ${canGenerate ? 'bg-orange-600 hover:bg-orange-700 text-white border-orange-700 hover:-translate-y-0.5' : 'bg-slate-100 border-slate-200 cursor-not-allowed text-slate-400'}`}>
@@ -1067,7 +1152,7 @@ ATURAN MUTLAK:
                             ))}
                         </div>
                         <div className="flex items-center gap-3">
-                            <span className="text-xs font-bold text-slate-500">Hal {currentPage} / {totalPages || 1}</span>
+                            <span className="text-sm font-bold text-slate-700 tracking-widest">{currentPage} / {totalPages || 1}</span>
                             <div className="flex gap-1">
                                 <button disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)} className="p-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-50 border border-slate-200 transition"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
                                 <button disabled={currentPage === totalPages || totalPages === 0} onClick={() => setCurrentPage(p => p + 1)} className="p-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-50 border border-slate-200 transition"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
