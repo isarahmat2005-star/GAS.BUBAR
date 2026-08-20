@@ -8,16 +8,181 @@ import {
     CheckCircleIcon, XCircleIcon, TrashIcon, SparklesIcon, 
     Wand2Icon, PlayIcon, PauseIcon, DownloadIcon, FileTextIcon, 
     EyeIcon, ImageIcon, AlertTriangleIcon, ChevronDownIcon, 
-    PlusIcon, CopyIcon, UploadIcon 
+    PlusIcon, CopyIcon, UploadIcon, UserIcon, LogOutIcon // Ditambahkan UserIcon dan LogOutIcon
 } from './icons.jsx';
 import { 
     MathRandom, formatImage, dataUrlToBlob, 
     upscaleBlobUrl, callGeminiApiViaProxy 
 } from './utils.js';
 
+// =====================================================================
+// === KONFIGURASI GOOGLE APPS SCRIPT (SATPAM LOGIN) ===
+// =====================================================================
+const GAS_AUTH_URL = "https://script.google.com/macros/s/AKfycbx0tRGGEtOyJumYhvzZcOi9Q68Rb-43DqsfAiWO57T8el8O9vQ0681xhwge71JVGjEugg/exec"; 
+
+// =====================================================================
+// === INDEXED DB HELPER FUNCTIONS (DEVICE ID) ===
+// =====================================================================
+const DB_NAME = 'GasBubarDB';
+const DB_VERSION = 1;
+const META_STORE_NAME = 'meta_store';
+
+const initDB = () => {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onerror = (event) => reject("IndexedDB error: " + event.target.errorCode);
+        request.onsuccess = (event) => resolve(event.target.result);
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(META_STORE_NAME)) {
+              db.createObjectStore(META_STORE_NAME, { keyPath: 'key' }); 
+            }
+        };
+    });
+};
+
+const saveDeviceIdToDB = async (id) => {
+    try {
+        const db = await initDB();
+        const tx = db.transaction(META_STORE_NAME, 'readwrite');
+        tx.objectStore(META_STORE_NAME).put({ key: 'device_id', value: id });
+    } catch (err) {
+        console.error('Gagal simpan device id ke IndexedDB:', err);
+    }
+};
+
+const loadDeviceIdFromDB = () => {
+    return new Promise(async (resolve) => {
+        try {
+            const db = await initDB();
+            const tx = db.transaction(META_STORE_NAME, 'readonly');
+            const req = tx.objectStore(META_STORE_NAME).get('device_id');
+            req.onsuccess = () => resolve(req.result ? req.result.value : null);
+            req.onerror = () => resolve(null);
+        } catch (err) {
+            resolve(null);
+        }
+    });
+};
+
 export default function App() {
     const [currentTime, setCurrentTime] = useState(new Date());
     
+    // --- AUTH STATE ---
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [authEmail, setAuthEmail] = useState('');
+    const [loginEmail, setLoginEmail] = useState('');
+    const [loginState, setLoginState] = useState('idle'); 
+    const [deviceId, setDeviceId] = useState('');
+    const [showFullEmail, setShowFullEmail] = useState(false);
+    const [logoutConfirm, setLogoutConfirm] = useState(false);
+    
+    // --- TOAST STATE ---
+    const [toast, setToast] = useState({ show: false, message: '', type: 'success' }); 
+
+    const showToast = (message, type = 'success') => {
+        setToast({ show: true, message, type });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
+    };
+
+    const getMaskedEmail = (email) => {
+        if (!email) return '';
+        const [name, domain] = email.split('@');
+        if (!domain) return email;
+        return '*'.repeat(name.length) + '@' + domain;
+    };
+
+    // Initialize App and Check Auth
+    useEffect(() => {
+        const initAuth = async () => {
+            // 1. Setup Device ID (cross-check localStorage + IndexedDB)
+            let currentDeviceId = localStorage.getItem('gasbubar_device_id');
+            const dbDeviceId = await loadDeviceIdFromDB();
+  
+            if (!currentDeviceId && dbDeviceId) {
+                currentDeviceId = dbDeviceId;
+                localStorage.setItem('gasbubar_device_id', currentDeviceId);
+            } else if (!currentDeviceId) {
+                currentDeviceId = 'dev_' + Math.random().toString(36).substring(2, 15);
+                localStorage.setItem('gasbubar_device_id', currentDeviceId);
+            }
+  
+            saveDeviceIdToDB(currentDeviceId); 
+            setDeviceId(currentDeviceId);
+  
+            // 2. Check existing session
+            const session = localStorage.getItem('gasbubar_session');
+            if (session) {
+                const parsedSession = JSON.parse(session);
+                setIsAuthenticated(true);
+                setAuthEmail(parsedSession.email);
+            }
+        };
+  
+        initAuth();
+    }, []);
+
+    const handleLogin = async () => {
+        if (!loginEmail.trim()) {
+            showToast("Masukkan email terlebih dahulu", "error");
+            return;
+        }
+        
+        setLoginState('loading');
+        
+        try {
+            const res = await fetch(GAS_AUTH_URL, {
+                method: 'POST',
+                mode: 'cors',
+                redirect: 'follow',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'login', email: loginEmail, deviceId: deviceId })
+            });
+            
+            const data = await res.json();
+            
+            if (data.success) {
+                setLoginState('success');
+                showToast("Selamat Datang Kembali", "success");
+                
+                localStorage.setItem('gasbubar_session', JSON.stringify({ email: loginEmail }));
+                setAuthEmail(loginEmail);
+                
+                setIsAuthenticated(true);
+            } else {
+                setLoginState('failed');
+                if (data.message === "Max Device Terpakai") {
+                    showToast("Max Device Terpakai", "error");
+                } else if (data.message === "Email Tidak Terdaftar") {
+                    showToast("Email Tidak Terdaftar", "error");
+                } else {
+                    showToast(data.message || "Gagal Login", "error");
+                }
+                setTimeout(() => setLoginState('idle'), 1500);
+            }
+        } catch (err) {
+            console.error("Auth error:", err);
+            setLoginState('failed');
+            showToast("Koneksi gagal. Cek internet atau URL Satpam.", "error");
+            setTimeout(() => setLoginState('idle'), 1500);
+        }
+    };
+  
+    const handleLogout = () => {
+        fetch(GAS_AUTH_URL, {
+            method: 'POST',
+            mode: 'cors',
+            redirect: 'follow',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'logout', email: authEmail, deviceId })
+        }).catch(err => console.error("Gagal mengirim sinyal logout ke GAS:", err));
+  
+        localStorage.removeItem('gasbubar_session');
+        setIsAuthenticated(false);
+        setAuthEmail('');
+        window.location.reload(); 
+    };
+
     // Panel Kontrol
     const [selectedModel, setSelectedModel] = useState('gemini-3.1-flash-image');
     const [selectedRatio, setSelectedRatio] = useState('1:1');
@@ -571,6 +736,49 @@ ATURAN MUTLAK:
     const totalPages = Math.ceil(images.length / itemsPerPage);
     const paginatedImages = images.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
+    // ==========================================
+    // UI - LOGIN SCREEN 
+    // ==========================================
+    if (!isAuthenticated) {
+        return (
+            <div className="fixed inset-0 flex items-center justify-center bg-slate-100 overflow-hidden" style={{ backgroundImage: 'linear-gradient(rgba(234, 88, 12, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(234, 88, 12, 0.05) 1px, transparent 1px)', backgroundSize: '20px 20px' }}>
+                <div className={`fixed top-4 right-4 z-[9999] transition-all duration-500 transform ${toast.show ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0'}`}>
+                    <div className={`px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 border ${toast.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
+                        {toast.type === 'error' ? <AlertTriangleIcon className="w-5 h-5"/> : <CheckCircleIcon className="w-5 h-5"/>}
+                        <span className="font-bold text-sm tracking-wide">{toast.message}</span>
+                    </div>
+                </div>
+
+                <div className={`flex flex-col items-center justify-center w-full max-w-sm px-4 z-10 transition-all duration-500 ${loginState === 'success' ? 'opacity-0 scale-110' : 'opacity-100 scale-100'}`}>
+                    <div className="text-[32px] leading-none font-black text-orange-500 tracking-widest flex items-center gap-2 mb-6 drop-shadow-sm">
+                        GAS.BUBAR
+                    </div>
+                    <div className="w-full bg-white p-6 rounded-lg border border-orange-200 shadow-md flex flex-col gap-4 relative z-10">
+                        <input 
+                            type="email" 
+                            value={loginEmail} 
+                            onChange={e => setLoginEmail(e.target.value)} 
+                            onKeyDown={e => e.key === 'Enter' && handleLogin()} 
+                            className="w-full p-3 rounded-lg bg-white border border-slate-300 text-slate-800 font-bold text-center outline-none transition-all h-12 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 disabled:opacity-50 disabled:bg-slate-100" 
+                            placeholder="MASUKKAN EMAIL" 
+                            disabled={loginState === 'loading' || loginState === 'success'} 
+                        />
+                        <button 
+                            onClick={handleLogin} 
+                            disabled={loginState === 'loading' || loginState === 'success'} 
+                            className="bg-orange-600 hover:bg-orange-700 text-white p-3 text-base font-bold rounded-lg cursor-pointer shadow-sm transition disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                            {loginState === 'loading' ? <><CustomSpinner className="w-5 h-5 text-white" /> MEMPROSES...</> : 'LOGIN'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ==========================================
+    // UI - MAIN APP
+    // ==========================================
     return (
         <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-slate-100 text-slate-900 flex flex-col">
             <header className="bg-[#0f172a] border-b border-slate-800 sticky top-0 z-30 shadow-md h-14 flex items-center shrink-0">
@@ -590,6 +798,29 @@ ATURAN MUTLAK:
                     <div className="flex-1 flex flex-col overflow-y-visible lg:overflow-y-auto overflow-x-hidden custom-scroll">
                         <div className="p-4 flex flex-col gap-4">
                             
+                            {/* ACTIVE USER PANEL (Satpam Sesi) */}
+                            <div className="flex items-center justify-between p-3 bg-white border border-orange-200 rounded-lg shadow-sm">
+                                <div className="flex items-center gap-2 overflow-hidden">
+                                    <div className="w-8 h-8 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center shrink-0">
+                                        <UserIcon className="w-4 h-4" />
+                                    </div>
+                                    <div className="flex flex-col min-w-0">
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">Email Aktif</span>
+                                        <span className="text-xs font-bold text-slate-700 truncate pr-2">
+                                            {showFullEmail ? authEmail : getMaskedEmail(authEmail)}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                    <button onClick={() => setShowFullEmail(!showFullEmail)} className="w-8 h-8 flex items-center justify-center bg-slate-50 text-slate-500 hover:bg-slate-200 hover:text-slate-700 rounded-md transition-colors shadow-sm shrink-0" title={showFullEmail ? "Sembunyikan Email" : "Tampilkan Email"}>
+                                        <EyeIcon className="w-4 h-4" />
+                                    </button>
+                                    <button onClick={() => setLogoutConfirm(true)} className="w-8 h-8 flex items-center justify-center bg-red-50 text-red-600 hover:bg-red-600 hover:text-white rounded-md transition-colors shadow-sm shrink-0" title="Logout">
+                                        <LogOutIcon className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+
                             <div className="flex gap-2 w-full">
                                 <button onClick={() => window.open('https://lynk.id/isaproject', '_blank')} className="flex-1 flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 rounded-lg transition shadow-sm text-xs tracking-wide">
                                     <BriefcaseIcon /> My Project
@@ -924,6 +1155,22 @@ ATURAN MUTLAK:
                         <div className="flex w-full gap-3">
                             <button onClick={() => setClearAllConfirm(false)} className="flex-1 bg-slate-200 text-slate-700 font-bold py-2 rounded-lg hover:bg-slate-300 transition">Batal</button>
                             <button onClick={confirmClearAllAction} className="flex-1 bg-red-600 text-white font-bold py-2 rounded-lg hover:bg-red-700 transition shadow-sm">Ya, Hapus Semua</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {logoutConfirm && (
+                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm flex flex-col items-center text-center">
+                        <div className="bg-red-100 p-3 rounded-full mb-3">
+                            <AlertTriangleIcon />
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-800">Keluar dari Akun?</h3>
+                        <p className="text-sm text-slate-600 mt-2 mb-6">Apakah Anda yakin ingin logout? Anda harus login kembali untuk mengakses aplikasi.</p>
+                        <div className="flex w-full gap-3">
+                            <button onClick={() => setLogoutConfirm(false)} className="flex-1 bg-slate-200 text-slate-700 font-bold py-2 rounded-lg hover:bg-slate-300 transition">Batal</button>
+                            <button onClick={() => { setLogoutConfirm(false); handleLogout(); }} className="flex-1 bg-red-600 text-white font-bold py-2 rounded-lg hover:bg-red-700 transition shadow-sm">Ya, Logout</button>
                         </div>
                     </div>
                 </div>
